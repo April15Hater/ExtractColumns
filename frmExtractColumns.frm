@@ -6,6 +6,7 @@ Begin {C62A69F0-16DC-11CE-9E98-00AA00574A4F} frmExtractColumns
    ClientTop       =   330
    ClientWidth     =   4425
    OleObjectBlob   =   "frmExtractColumns.frx":0000
+   ShowModal       =   0   'False
    StartUpPosition =   1  'CenterOwner
 End
 Attribute VB_Name = "frmExtractColumns"
@@ -14,45 +15,39 @@ Attribute VB_Creatable = False
 Attribute VB_PredeclaredId = True
 Attribute VB_Exposed = False
 Option Explicit
-Public WithEvents App As Application
-Attribute App.VB_VarHelpID = -1
-'****************************************************************************************
-'*  Name        :   frmExtractColumns                                                   *
-'*  Authors     :   Joseph Solomon, CPA; Richard Austin; Scott Parrett                  *
-'*  Conventions :   Reddick-Gray Naming, RVBA Coding                                    *
-'*  Next Steps  :   1)  Add functionality to Column Title Row Text Box                  *
-'*                  2)  Code to populate Columns Listbox                                *
-'*                  3)  Code to extract selected columns from the workbook into a new   *
-'*                          workbook.                                                   *
-'*                  4)  Add functionality to Open Workbook Command                      *
-'*                  5)  Set Userform properties and convert to xlam (2007+ Addin)       *
-'*                                                                                      *
-'*  Wish List   :   1)  Loop Worksheets in Workbook                                     *                                                                           *
-'*                  2)  Convert Fixed-Width Text Files.                                 *
-'*                                                                                      *
-'*  Rev Date        Description                                                         *
-'*  ~~~ ~~~~~~~~~~  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~                           *
-'*  1   2012/12/14  Created form and various controls.  Coded open workbooks listbox to *
-'*                      update on various Application events, created/updated           *
-'*                      documentation.                                                  *
-'****************************************************************************************
+Public WithEvents app As Application
+Attribute app.VB_VarHelpID = -1
 
-'*                                                                                      *
+'****************************************************************************************
 '*  Methods                     Scope       Description                                 *
 '*  ~~~~~~~~~~~~~~~~~~~~~~~~~~~ ~~~~~~~~~~~ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~           *
 '*  AddOpenWorkbookstoListbox   Private     Populates passed listbox with open listboxes*
 '*                                              from ListOpenWorkbooks function         *
 '*  mvarListOpenWorkbooks       Private     Function that returns string array of open  *
 '*                                              workbooks on the machine. Function will *
-'*                                              return non-array variant on failure     *                                                                                      *
-'*
+'*                                              return non-array variant on failure     *
+'*  AddColumnstoListbox         Private     Adds all columns from workbooks selected to *
+'*                                              the columns listbox                     *
+'****************************************************************************************
 Private Sub AddOpenWorkbookstoListbox( _
 ByVal pvlstOpenWbks As MSForms.ListBox)
     'pvlstOpenWbks                      'Listbox Object that will get populated by this
     '                                       subroutine
     Dim wksTarget As Worksheet          'Worksheets to be walked
+    Dim uobjWorksheet As clsWorksheet   'Class object holding one user-selected
+                                            'instance with a workbook and worksheet
+                                            'object.
+    Dim uobjWorksheets As clsWorksheets 'Custom collection class holding each user-
+                                            'selected wbk/wks instance.
     Dim varaNameOpenWorkbook As Variant 'Array of open workbooks
     Dim lngA As Long                    'Generic Counter
+    
+    'Store User-Selections from listbox
+    Set uobjWorksheets = New clsWorksheets
+    uobjWorksheets.FillFromListbox _
+        prlstWbkWks:=pvlstOpenWbks, _
+        pvlngWBCol:=1, _
+        pvlngWSCol:=2
     
     'Get open workbooks
     varaNameOpenWorkbook = mvarListOpenWorkbooks
@@ -64,10 +59,24 @@ ByVal pvlstOpenWbks As MSForms.ListBox)
     'Loop array, add values to passed listbox control
     For lngA = LBound(varaNameOpenWorkbook) To UBound(varaNameOpenWorkbook)
         For Each wksTarget In Workbooks(varaNameOpenWorkbook(lngA)).Sheets
-            pvlstOpenWbks.AddItem 1, varaNameOpenWorkbook(lngA)
-            pvlstOpenWbks.AddItem 2, wksTarget.Name
-        Next lngB
+            With pvlstOpenWbks
+                .AddItem
+                .Column(1, .ListCount - 1) = varaNameOpenWorkbook(lngA)
+                .Column(2, .ListCount - 1) = wksTarget.Name
+            End With
+        Next wksTarget
     Next lngA
+    
+    'Reset listbox to user-selected values
+    For Each uobjWorksheet In uobjWorksheets
+        For lngA = 0 To pvlstOpenWbks.ListCount - 1
+            If uobjWorksheet.gstrWbkWksName = _
+                pvlstOpenWbks.Column(1, lngA) & "|" & _
+                pvlstOpenWbks.Column(2, lngA) Then
+                pvlstOpenWbks.Selected(lngA) = True
+            End If
+        Next lngA
+    Next uobjWorksheet
 End Sub
 
 Private Function mvarListOpenWorkbooks() As Variant
@@ -105,32 +114,125 @@ mvarListOpenWorkbooks_Err:
     GoTo mvarListOpenWorkbooks_Exit
 End Function
 
-Private Sub App_NewWorkbook(ByVal Wb As Workbook)
-    AddOpenWorkbookstoListbox pvlstOpenWbks:=Me.lstWorkboo
+Private Sub AddColumnstoListbox( _
+ByVal pvlstColumns As MSForms.ListBox, _
+ByVal pvlstOpenWbks As MSForms.ListBox, _
+ByVal pvlngTitleRow As Long)
+'pvlstColumns                   'Listbox Control Object to list available columns
+'pvlstOpenWbks                  'Listbox Control Object to list open workbooks
+'pvlngTitleRow                  'Title Row of Excel spreadsheets
+Dim lngLoopCount As Long        'Counter
+Dim lngLoopCount2 As Long       'counter
+Dim rngTitleRange As Range      'Range defining the column titles for a worksheet
+Dim rngTitleCell As Range       'Individual column title cell within column title range
+Dim lngCountRowHdrs As Long     'Count of row headers
+Dim lngCountWbksSel As Long     'Number of workbooks selected
+Dim blnTitleFound As Boolean    'Used to prevent duplicate titles
+Dim colTitles As Collection     'Collection to hold column titles
+    On Error GoTo AddColumnstoListbox_Err
+    pvlstColumns.Clear
+    Set colTitles = New Collection
+    
+    'Count Selections
+    For lngLoopCount = 0 To pvlstOpenWbks.ListCount - 1
+        If pvlstOpenWbks.Selected(lngLoopCount) Then
+            lngCountWbksSel = lngCountWbksSel + 1
+        End If
+    Next lngLoopCount
+    If lngCountWbksSel = 0 Then Exit Sub
+
+    'Look at all column headers in all worksheets, and add uniques to the collection
+    lngCountRowHdrs = 0
+    For lngLoopCount = 0 To pvlstOpenWbks.ListCount - 1
+        If pvlstOpenWbks.Selected(lngLoopCount) Then
+            With Workbooks(pvlstOpenWbks.Column(1, lngLoopCount)) _
+                .Worksheets(pvlstOpenWbks.Column(2, lngLoopCount))
+                
+                Set rngTitleRange = Application.Intersect( _
+                    .Cells(pvlngTitleRow, 1).EntireRow, .UsedRange)
+                    
+                For Each rngTitleCell In rngTitleRange
+                    For lngLoopCount2 = 1 To colTitles.Count
+                        If colTitles.Item(lngLoopCount2) = rngTitleCell.Value Then
+                            blnTitleFound = True
+                            Exit For
+                        End If
+                    Next lngLoopCount2
+                    If Not blnTitleFound Then colTitles.Add rngTitleCell.Value
+                    blnTitleFound = False
+                Next rngTitleCell
+            End With
+        End If
+    Next lngLoopCount
+
+    'Add collection values to the Columns Listbox
+    For lngLoopCount = 0 To colTitles.Count - 1
+        lstExtractColumns.AddItem colTitles.Item(lngLoopCount + 1), lngLoopCount
+    Next lngLoopCount
+    
+AddColumnstoListbox_Exit:
+
+AddColumnstoListbox_Err:
+    Select Case Err.Number
+        Case Is = 9 'Subscript out of range.  Can trigger if lstWorkbook didn't update
+            AddOpenWorkbookstoListbox lstWorkbook
+            Resume
+    End Select
 End Sub
 
-Private Sub App_WorkbookAfterSave(ByVal Wb As Workbook, ByVal Success As Boolean)
+Private Sub app_NewWorkbook(ByVal Wb As Workbook)
+    AddOpenWorkbookstoListbox pvlstOpenWbks:=Me.lstWorkbook
+End Sub
+
+Private Sub app_SheetActivate(ByVal Sh As Object)
+    AddOpenWorkbookstoListbox pvlstOpenWbks:=Me.lstWorkbook
+End Sub
+
+Private Sub app_WorkbookAfterSave(ByVal Wb As Workbook, ByVal Success As Boolean)
     If Success Then
         AddOpenWorkbookstoListbox pvlstOpenWbks:=Me.lstWorkbook
     End If
 End Sub
 
-Private Sub App_WorkbookDeactivate(ByVal Wb As Workbook)
+Private Sub app_WorkbookOpen(ByVal Wb As Workbook)
     AddOpenWorkbookstoListbox pvlstOpenWbks:=Me.lstWorkbook
 End Sub
 
-Private Sub App_WorkbookOpen(ByVal Wb As Workbook)
-    AddOpenWorkbookstoListbox pvlstOpenWbks:=Me.lstWorkbook
+Private Sub cmdExtract_Click()
+    ExtractColumns Me.lstWorkbook, Me.lstExtractColumns
 End Sub
 
-Private Sub App_WorkbookSync(ByVal Wb As Workbook, ByVal SyncEventType As Office.MsoSyncEventType)
-    AddOpenWorkbookstoListbox pvlstOpenWbks:=Me.lstWorkbook
+Private Sub cmdOpenWorkbook_Click()
+    Dim lngA As Long
+    With Application.FileDialog(msoFileDialogOpen)
+        .AllowMultiSelect = True
+        .FilterIndex = 2
+        .Show
+
+        ' Display paths of each file selected
+        For lngA = 1 To .SelectedItems.Count
+            Application.Workbooks.Open .SelectedItems(lngA)
+        Next lngA
+    End With
 End Sub
 
 Private Sub cmdRefresh_Click()
     AddOpenWorkbookstoListbox pvlstOpenWbks:=Me.lstWorkbook
 End Sub
 
+Private Sub lstWorkbook_AfterUpdate()
+    AddColumnstoListbox lstExtractColumns, lstWorkbook, txtTitleRow
+End Sub
+
+Private Sub lstWorkbook_Change()
+    AddColumnstoListbox lstExtractColumns, lstWorkbook, txtTitleRow
+End Sub
+
 Private Sub lstWorkbook_Enter()
     AddOpenWorkbookstoListbox pvlstOpenWbks:=Me.lstWorkbook
 End Sub
+
+Private Sub UserForm_Initialize()
+    Set app = ThisWorkbook.Parent
+End Sub
+
